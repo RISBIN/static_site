@@ -24,9 +24,14 @@ jobs:
           # Create SSH directory
           mkdir -p ~/.ssh
 
-          # Decode and add private key from secrets (base64 encoded to preserve formatting)
-          # Remove any whitespace/newlines before decoding
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_ed25519
+          # Add private key from secrets
+          # Try base64 decode first, if it fails, use raw key
+          if echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_ed25519 2>/dev/null && [ -s ~/.ssh/id_ed25519 ]; then
+            echo "Using base64-encoded key"
+          else
+            echo "Base64 decode failed, using raw key"
+            echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          fi
 
           # Set correct permissions
           chmod 600 ~/.ssh/id_ed25519
@@ -36,6 +41,8 @@ jobs:
             echo "ERROR: SSH key file is empty or not created"
             exit 1
           fi
+
+          echo "SSH key configured successfully"
 
           # Add VM to known hosts (avoid fingerprint prompt)
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts

@@ -24,8 +24,8 @@ jobs:
           # Create SSH directory
           mkdir -p ~/.ssh
 
-          # Add private key from secrets
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          # Decode and add private key from secrets (base64 encoded to preserve formatting)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 -d > ~/.ssh/id_ed25519
 
           # Set correct permissions
           chmod 600 ~/.ssh/id_ed25519

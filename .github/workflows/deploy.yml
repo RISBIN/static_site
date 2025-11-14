@@ -25,10 +25,17 @@ jobs:
           mkdir -p ~/.ssh
 
           # Decode and add private key from secrets (base64 encoded to preserve formatting)
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 -d > ~/.ssh/id_ed25519
+          # Remove any whitespace/newlines before decoding
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_ed25519
 
           # Set correct permissions
           chmod 600 ~/.ssh/id_ed25519
+
+          # Verify key was created successfully
+          if [ ! -s ~/.ssh/id_ed25519 ]; then
+            echo "ERROR: SSH key file is empty or not created"
+            exit 1
+          fi
 
           # Add VM to known hosts (avoid fingerprint prompt)
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts

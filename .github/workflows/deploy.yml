@@ -1,31 +1,26 @@
-name: Deploy to Azure VM
+name: Blue-Green Deployment to Azure VM
 
-# When to run this workflow
 on:
   push:
     branches:
-      - main      # Run on push to main branch
-      - master    # Or master branch
-  workflow_dispatch:  # Allow manual trigger
+      - main
+      - master
+  workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy Website
-    runs-on: ubuntu-latest  # GitHub's Ubuntu runner
+    name: Blue-Green Deploy
+    runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout code (not needed for SSH, but good practice)
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      # Step 2: Setup SSH and Deploy
-      - name: Deploy to VM via SSH
+      - name: Setup SSH and Deploy (Blue-Green)
         run: |
-          # Create SSH directory
           mkdir -p ~/.ssh
 
-          # Add private key from secrets
-          # Try base64 decode first, if it fails, use raw key
+          # Try base64 decode first
           if echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_ed25519 2>/dev/null && [ -s ~/.ssh/id_ed25519 ]; then
             echo "Using base64-encoded key"
           else
@@ -33,89 +28,111 @@ jobs:
             echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           fi
 
-          # Set correct permissions
           chmod 600 ~/.ssh/id_ed25519
 
-          # Verify key was created successfully
           if [ ! -s ~/.ssh/id_ed25519 ]; then
-            echo "ERROR: SSH key file is empty or not created"
+            echo "ERROR: SSH key file is empty"
             exit 1
           fi
 
           echo "SSH key configured successfully"
 
-          # Add VM to known hosts (avoid fingerprint prompt)
+          # Add host to known hosts
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-          # SSH to VM and run deployment
+          # Start Blue-Green deployment
           ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
-          #ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
-            # Everything between ENDSSH runs on VM
+            #!/bin/bash
+            set -e
 
             echo "========================================"
-            echo "🚀 GitHub Actions Deployment Started"
+            echo "🔵🟢 Blue-Green Deployment Started"
             echo "Time: $(date)"
+            echo "Triggered by: GitHub Actions"
             echo "========================================"
 
-            # Go to website directory
-            cd /var/www/portfolio
+            CURRENT_LINK=$(readlink /var/www/current)
 
-            # Show current version
-            echo ""
-            echo "Current version:"
-            git log -1 --oneline
+            if [[ $CURRENT_LINK == *"blue"* ]]; then
+                ACTIVE_ENV="blue"
+                INACTIVE_ENV="green"
+                INACTIVE_DIR="/var/www/portfolio-green"
+            else
+                ACTIVE_ENV="green"
+                INACTIVE_ENV="blue"
+                INACTIVE_DIR="/var/www/portfolio-blue"
+            fi
 
-            # Pull latest changes
+            echo "Active: $ACTIVE_ENV | Deploying to: $INACTIVE_ENV"
             echo ""
-            echo "Pulling latest changes..."
-            git pull origin main
 
-            # Reload Nginx
-            echo ""
-            echo "Reloading Nginx..."
-            sudo systemctl reload nginx
+            echo "📥 Pulling latest code to $INACTIVE_ENV..."
+            cd $INACTIVE_DIR
+            git fetch origin main
+            git reset --hard origin/main
 
-            # Verify
-            echo ""
-            echo "New version:"
-            git log -1 --oneline
+            echo "🏥 Creating temporary health check site..."
+            sudo tee /etc/nginx/sites-available/test-$INACTIVE_ENV > /dev/null <<EOF
+            server {
+                listen 8888;
+                root $INACTIVE_DIR;
+                index index.html;
+                location / { try_files \$uri \$uri/ =404; }
+            }
+            EOF
 
-            echo ""
-            echo "========================================"
-            echo "✅ Deployment Completed Successfully!"
-            echo "Time: $(date)"
-            echo "========================================"
+            sudo ln -sf /etc/nginx/sites-available/test-$INACTIVE_ENV /etc/nginx/sites-enabled/
+            sudo nginx -t && sudo systemctl reload nginx
+            sleep 3
+
+            echo "🏥 Running health check..."
+            if curl -f http://localhost:8888 > /dev/null 2>&1; then
+                echo "✅ Health check PASSED!"
+                sudo rm /etc/nginx/sites-enabled/test-$INACTIVE_ENV
+                sudo systemctl reload nginx
+
+                echo "🔀 Switching traffic to $INACTIVE_ENV..."
+                sudo ln -sfn $INACTIVE_DIR /var/www/current
+                sudo systemctl reload nginx
+
+                echo "========================================"
+                echo "🎉 Deployment Successful!"
+                echo "New Active: $INACTIVE_ENV"
+                echo "Time: $(date)"
+                echo "========================================"
+            else
+                echo "❌ Health check FAILED!"
+                sudo rm /etc/nginx/sites-enabled/test-$INACTIVE_ENV
+                sudo systemctl reload nginx
+                exit 1
+            fi
           ENDSSH
 
-      # Step 3: Verify website is accessible
       - name: Verify Deployment
-        run: |
-          echo "Waiting 5 seconds for deployment to settle..."
-          sleep 5
-
-          echo "Checking if website is accessible..."
-          if curl -f http://${{ secrets.SSH_HOST }} > /dev/null 2>&1; then
-            echo "✅ Website is accessible!"
-          else
-            echo "⚠️  Warning: Website check failed (might be temporary)"
-          fi
-
-      # Step 4: Cleanup (remove private key)
-      - name: Cleanup
-        if: always()  # Run even if previous steps failed
-        run: rm -f ~/.ssh/id_ed25519
-
-      # Step 5: Notify success
-      - name: Success Notification
         if: success()
         run: |
-          echo "🎉 Deployment successful!"
-          echo "Website URL: http://${{ secrets.SSH_HOST }}"
-          echo "Deployed commit: ${{ github.sha }}"
+          echo "Waiting 5 seconds..."
+          sleep 5
 
-      # Step 6: Notify failure
-      - name: Failure Notification
+          echo "Checking website..."
+          if curl -f http://${{ secrets.SSH_HOST }} > /dev/null 2>&1; then
+            echo "✅ Website is online!"
+          else
+            echo "⚠️ Warning: Website did not respond."
+          fi
+
+      - name: Cleanup SSH Key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
+
+      - name: Deployment Success
+        if: success()
+        run: |
+          echo "🎉 Blue-Green Deployment Completed!"
+          echo "Website: http://${{ secrets.SSH_HOST }}"
+
+      - name: Deployment Failed
         if: failure()
         run: |
           echo "❌ Deployment failed!"
-          echo "Check the logs above for errors."
+          echo "Previous version remains active."

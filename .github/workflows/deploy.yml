@@ -25,16 +25,16 @@ jobs:
           mkdir -p ~/.ssh
 
           # Add private key from secrets
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
 
           # Set correct permissions
-          chmod 600 ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/id_ed25519
 
           # Add VM to known hosts (avoid fingerprint prompt)
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
           # SSH to VM and run deployment
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
+          ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
             # Everything between ENDSSH runs on VM
 
             echo "========================================"
@@ -88,7 +88,7 @@ jobs:
       # Step 4: Cleanup (remove private key)
       - name: Cleanup
         if: always()  # Run even if previous steps failed
-        run: rm -f ~/.ssh/deploy_key
+        run: rm -f ~/.ssh/id_ed25519
 
       # Step 5: Notify success
       - name: Success Notification
